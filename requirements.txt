@@ -1,0 +1,3 @@
+telethon
+ccxt
+python-dotenv
