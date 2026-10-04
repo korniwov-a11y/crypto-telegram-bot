@@ -14,14 +14,21 @@ TARGET_CHANNEL = os.getenv("TARGET_CHANNEL")
 BYBIT_DEMO_KEY = os.getenv("BYBIT_DEMO_KEY")
 BYBIT_DEMO_SECRET = os.getenv("BYBIT_DEMO_SECRET")
 
-# Инициализация Bybit Demo (Futures)
+# Инициализация Bybit c защитой от гео-блокировок (bytick.com)
 exchange = ccxt.bybit({
     'apiKey': BYBIT_DEMO_KEY,
     'secret': BYBIT_DEMO_SECRET,
     'enableRateLimit': True,
+    'urls': {
+        'api': {
+            'spot': 'https://api.bytick.com',
+            'contract': 'https://api.bytick.com',
+            'unified': 'https://api.bytick.com',
+        }
+    },
     'options': {
         'defaultType': 'future',
-        'defaultMarginMode': 'cross',  # Устанавливаем режим кросс-маржи по умолчанию
+        'defaultMarginMode': 'cross',  # Режим Кросс-маржи
     }
 })
 exchange.set_sandbox_mode(True)
@@ -30,9 +37,9 @@ client = TelegramClient('user_session', TELEGRAM_API_ID, TELEGRAM_API_HASH)
 
 def parse_asset(text: str):
     """
-    Извлекает только наименование актива из текста сообщения.
+    Извлекает только наименование актива из сигналов формата: #TRUMP/USDT (Spot, Futures)
     """
-    pattern = r'\b([A-Z0-9]{2,10})(?:USDT)?\b'
+    pattern = r'#?([A-Z0-9]{2,15})(?:/USDT|USDT)'
     match = re.search(pattern, text.upper())
     
     if match:
@@ -40,42 +47,39 @@ def parse_asset(text: str):
         ignored_words = {'BUY', 'SELL', 'LONG', 'SHORT', 'TP', 'SL', 'USDT', 'SIGNAL'}
         if raw_symbol in ignored_words:
             return None
-        
-        formatted_symbol = f"{raw_symbol}/USDT:USDT"
-        return formatted_symbol
+            
+        return f"{raw_symbol}/USDT:USDT"
     return None
 
 async def setup_symbol_config(symbol: str):
     """
-    Устанавливает режим КРОСС-маржи и максимальное плечо для торговой пары.
+    Настраивает Кросс-маржу и выставляет максимальное плечо для пары.
     """
     try:
         markets = await exchange.load_markets()
         market = markets.get(symbol)
         
-        # 1. Переключение на Кросс-маржу (Cross Margin Mode: 0 - Cross, 1 - Isolated на Bybit)
+        # 1. Установка Кросс-маржи
         try:
             await exchange.set_margin_mode('cross', symbol, params={'tradeMode': 0})
-            print(f"[MARGIN] Режим Кросс-маржи успешно установлен для {symbol}")
+            print(f"[MARGIN] Кросс-маржа установлена для {symbol}")
         except Exception as e:
-            print(f"[MARGIN NOTE] Уведомление по кросс-марже ({symbol}): {e}")
+            print(f"[MARGIN NOTE] Инфо по марже ({symbol}): {e}")
 
-        # 2. Получение максимального плеча
+        # 2. Получение и установка максимального плеча
         max_leverage = market.get('limits', {}).get('leverage', {}).get('max', 50) if market else 50
-        
-        # 3. Установка максимального плеча
         await exchange.set_leverage(int(max_leverage), symbol)
-        print(f"[LEVERAGE] Установлено максимальное плечо: {max_leverage}x для {symbol}")
+        print(f"[LEVERAGE] Установлено плечо: {max_leverage}x для {symbol}")
         
         return int(max_leverage)
     except Exception as e:
-        print(f"[WARNING] Ошибка настройки пары {symbol}: {e}. Используем плечо 20x по умолчанию.")
+        print(f"[WARNING] Ошибка настройки {symbol}: {e}. Используем плечо 20x.")
         return 20
 
 async def open_dual_positions(symbol: str, margin_usdt: float = 10.0):
     """
-    Открывает одновременно ордер в Long и в Short в режиме Kросс-маржи
-    с максимальным плечом, маржой 10$ и установкой TP (+150% ROI) / SL (-100% ROI).
+    Открывает одновременно Long и Short на $10 маржи с Кросс-маржей, 
+    макс. плечом, TP (+150% ROI) и SL (-100% ROI).
     """
     try:
         leverage = await setup_symbol_config(symbol)
@@ -83,26 +87,26 @@ async def open_dual_positions(symbol: str, margin_usdt: float = 10.0):
         ticker = await exchange.fetch_ticker(symbol)
         entry_price = ticker['last']
         
-        # Общий позиционный объем (Маржа * Плечо)
+        # Позиционный объем (Маржа * Плечо)
         position_value = margin_usdt * leverage
         quantity = position_value / entry_price
         
-        # Расчет TP (150% ROI) и SL (100% ROI)
+        # Расчет процента изменения цены для TP/SL
         tp_percent = 1.50 / leverage
         sl_percent = 1.00 / leverage
         
-        # Цены для Long
+        # Цены TP/SL для Long
         long_tp = entry_price * (1 + tp_percent)
         long_sl = entry_price * (1 - sl_percent)
         
-        # Цены для Short
+        # Цены TP/SL для Short
         short_tp = entry_price * (1 - tp_percent)
         short_sl = entry_price * (1 + sl_percent)
 
-        print(f"\n[EXECUTION] Вход в позиции (Кросс-маржа) по {symbol} | Цена: {entry_price} | Размер маржи: {margin_usdt}$ | Плечо: {leverage}x")
+        print(f"\n[EXECUTION] Вход по {symbol} | Цена: {entry_price} | Маржа: ${margin_usdt} | Плечо: {leverage}x")
 
-        # 1. Ордер в LONG
-        long_order = await exchange.create_order(
+        # 1. Открытие LONG (positionIdx: 1)
+        await exchange.create_order(
             symbol=symbol,
             type='market',
             side='buy',
@@ -110,13 +114,13 @@ async def open_dual_positions(symbol: str, margin_usdt: float = 10.0):
             params={
                 'takeProfit': exchange.price_to_precision(symbol, long_tp),
                 'stopLoss': exchange.price_to_precision(symbol, long_sl),
-                'positionIdx': 1  # Для Bybit Hedge Mode: 1 - Long
+                'positionIdx': 1
             }
         )
-        print(f"[LONG OPENED] TP: {long_tp:.4f} (+150% ROI) | SL: {long_sl:.4f} (-100% ROI)")
+        print(f"[LONG OPENED] TP: {long_tp:.4f} (+150%) | SL: {long_sl:.4f} (-100%)")
 
-        # 2. Ордер в SHORT
-        short_order = await exchange.create_order(
+        # 2. Открытие SHORT (positionIdx: 2)
+        await exchange.create_order(
             symbol=symbol,
             type='market',
             side='sell',
@@ -124,13 +128,13 @@ async def open_dual_positions(symbol: str, margin_usdt: float = 10.0):
             params={
                 'takeProfit': exchange.price_to_precision(symbol, short_tp),
                 'stopLoss': exchange.price_to_precision(symbol, short_sl),
-                'positionIdx': 2  # Для Bybit Hedge Mode: 2 - Short
+                'positionIdx': 2
             }
         )
-        print(f"[SHORT OPENED] TP: {short_tp:.4f} (+150% ROI) | SL: {short_sl:.4f} (-100% ROI)")
+        print(f"[SHORT OPENED] TP: {short_tp:.4f} (+150%) | SL: {short_sl:.4f} (-100%)")
 
     except Exception as e:
-        print(f"[ERROR] Ошибка при исполнении ордеров: {e}")
+        print(f"[ERROR] Ошибка выполнения ордеров: {e}")
 
 @client.on(events.NewMessage(chats=TARGET_CHANNEL if TARGET_CHANNEL else None))
 async def handle_new_message(event):
@@ -139,15 +143,15 @@ async def handle_new_message(event):
     
     symbol = parse_asset(message_text)
     if symbol:
-        print(f"[PARSED ASSET] Обнаружен актив: {symbol}")
+        print(f"[PARSED ASSET] Найден актив: {symbol}")
         await open_dual_positions(symbol, margin_usdt=10.0)
     else:
-        print("[SKIP] Актив в сообщении не найден.")
+        print("[SKIP] Актив не распознан.")
 
 async def main():
     print("Запуск бота...")
     await client.start()
-    print("Бот запущен и мониторит сигналы (Режим Кросс-маржи)...")
+    print("Бот запущен и ожидает сигналы...")
     await client.run_until_disconnected()
 
 if __name__ == '__main__':
