@@ -35,9 +35,15 @@ exchange = ccxt.bybit({
 })
 exchange.set_sandbox_mode(True)
 
-# Переключение авторизации: StringSession (GitHub Actions) / Файл (Локально)
+# Переключение авторизации с автопереподключением при сетевых сбоях
 if TELEGRAM_STRING_SESSION:
-    client = TelegramClient(StringSession(TELEGRAM_STRING_SESSION), TELEGRAM_API_ID, TELEGRAM_API_HASH)
+    client = TelegramClient(
+        StringSession(TELEGRAM_STRING_SESSION), 
+        TELEGRAM_API_ID, 
+        TELEGRAM_API_HASH,
+        auto_reconnect=True,
+        connection_retries=None  # Бесконечные попытки переподключения в течение 6 часов
+    )
 else:
     client = TelegramClient('user_session', TELEGRAM_API_ID, TELEGRAM_API_HASH)
 
@@ -46,7 +52,7 @@ def parse_asset(text: str):
     Извлекает наименование актива из сигналов формата: 
     #ETH, #BTC, #TRUMP/USDT, BTCUSDT и служебных сообщений о ликвидациях.
     """
-    # 1. Сначала ищем выражения со знаком # (например, #ETH, #BTC, #TRUMP)
+    # 1. Поиск выражений со знаком # (например, #ETH, #BTC, #TRUMP)
     hashtag_match = re.search(r'#([A-Z0-9]{2,15})', text.upper())
     if hashtag_match:
         raw_symbol = hashtag_match.group(1)
@@ -102,7 +108,10 @@ async def open_dual_positions(symbol: str, margin_usdt: float = 10.0):
         
         # Позиционный объем (Маржа * Плечо)
         position_value = margin_usdt * leverage
-        quantity = position_value / entry_price
+        raw_quantity = position_value / entry_price
+        
+        # Округление количества контрактов согласно точным правилам Bybit
+        quantity = float(exchange.amount_to_precision(symbol, raw_quantity))
         
         # Расчет процента изменения цены для TP/SL
         tp_percent = 1.50 / leverage
@@ -116,7 +125,7 @@ async def open_dual_positions(symbol: str, margin_usdt: float = 10.0):
         short_tp = entry_price * (1 - tp_percent)
         short_sl = entry_price * (1 + sl_percent)
 
-        print(f"\n[EXECUTION] Вход по {symbol} | Цена: {entry_price} | Маржа: ${margin_usdt} | Плечо: {leverage}x")
+        print(f"\n[EXECUTION] Вход по {symbol} | Цена: {entry_price} | Маржа: ${margin_usdt} | Плечо: {leverage}x | Объём: {quantity}")
 
         # 1. Открытие LONG (positionIdx: 1)
         await exchange.create_order(
@@ -125,8 +134,8 @@ async def open_dual_positions(symbol: str, margin_usdt: float = 10.0):
             side='buy',
             amount=quantity,
             params={
-                'takeProfit': exchange.price_to_precision(symbol, long_tp),
-                'stopLoss': exchange.price_to_precision(symbol, long_sl),
+                'takeProfit': float(exchange.price_to_precision(symbol, long_tp)),
+                'stopLoss': float(exchange.price_to_precision(symbol, long_sl)),
                 'positionIdx': 1
             }
         )
@@ -139,8 +148,8 @@ async def open_dual_positions(symbol: str, margin_usdt: float = 10.0):
             side='sell',
             amount=quantity,
             params={
-                'takeProfit': exchange.price_to_precision(symbol, short_tp),
-                'stopLoss': exchange.price_to_precision(symbol, short_sl),
+                'takeProfit': float(exchange.price_to_precision(symbol, short_tp)),
+                'stopLoss': float(exchange.price_to_precision(symbol, short_sl)),
                 'positionIdx': 2
             }
         )
