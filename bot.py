@@ -3,12 +3,14 @@ import re
 import asyncio
 from dotenv import load_dotenv
 from telethon import TelegramClient, events
+from telethon.sessions import StringSession
 import ccxt.async_support as ccxt
 
 load_dotenv()
 
 TELEGRAM_API_ID = int(os.getenv("TELEGRAM_API_ID", 0))
 TELEGRAM_API_HASH = os.getenv("TELEGRAM_API_HASH")
+TELEGRAM_STRING_SESSION = os.getenv("TELEGRAM_STRING_SESSION")
 TARGET_CHANNEL = os.getenv("TARGET_CHANNEL")
 
 BYBIT_DEMO_KEY = os.getenv("BYBIT_DEMO_KEY")
@@ -33,22 +35,33 @@ exchange = ccxt.bybit({
 })
 exchange.set_sandbox_mode(True)
 
-client = TelegramClient('user_session', TELEGRAM_API_ID, TELEGRAM_API_HASH)
+# Переключение авторизации: StringSession (GitHub Actions) / Файл (Локально)
+if TELEGRAM_STRING_SESSION:
+    client = TelegramClient(StringSession(TELEGRAM_STRING_SESSION), TELEGRAM_API_ID, TELEGRAM_API_HASH)
+else:
+    client = TelegramClient('user_session', TELEGRAM_API_ID, TELEGRAM_API_HASH)
 
 def parse_asset(text: str):
     """
-    Извлекает только наименование актива из сигналов формата: #TRUMP/USDT (Spot, Futures)
+    Извлекает наименование актива из сигналов формата: 
+    #ETH, #BTC, #TRUMP/USDT, BTCUSDT и служебных сообщений о ликвидациях.
     """
-    pattern = r'#?([A-Z0-9]{2,15})(?:/USDT|USDT)'
-    match = re.search(pattern, text.upper())
-    
-    if match:
-        raw_symbol = match.group(1)
+    # 1. Сначала ищем выражения со знаком # (например, #ETH, #BTC, #TRUMP)
+    hashtag_match = re.search(r'#([A-Z0-9]{2,15})', text.upper())
+    if hashtag_match:
+        raw_symbol = hashtag_match.group(1)
         ignored_words = {'BUY', 'SELL', 'LONG', 'SHORT', 'TP', 'SL', 'USDT', 'SIGNAL'}
-        if raw_symbol in ignored_words:
-            return None
-            
-        return f"{raw_symbol}/USDT:USDT"
+        if raw_symbol not in ignored_words:
+            return f"{raw_symbol}/USDT:USDT"
+
+    # 2. Поиск стандартных пар с суффиксом USDT (#TRUMP/USDT, ETHUSDT)
+    pair_match = re.search(r'#?([A-Z0-9]{2,15})(?:/USDT|USDT)', text.upper())
+    if pair_match:
+        raw_symbol = pair_match.group(1)
+        ignored_words = {'BUY', 'SELL', 'LONG', 'SHORT', 'TP', 'SL', 'USDT', 'SIGNAL'}
+        if raw_symbol not in ignored_words:
+            return f"{raw_symbol}/USDT:USDT"
+
     return None
 
 async def setup_symbol_config(symbol: str):
