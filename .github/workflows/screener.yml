@@ -1,13 +1,12 @@
-name: Crypto Trading Screener Bot
+name: Crypto Trading Screener Bot (6-Hour Test Run)
 
 on:
-  schedule:
-    - cron: '*/15 * * * *'
-  workflow_dispatch:
+  workflow_dispatch: # Запуск вручную по кнопке
 
 jobs:
   run-bot:
     runs-on: ubuntu-latest
+    timeout-minutes: 360 # Ограничение выполнения ровно 6 часов (360 минут)
 
     steps:
       - name: Checkout code
@@ -23,7 +22,7 @@ jobs:
           python -m pip install --upgrade pip
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
 
-      - name: Run Bot Screener
+      - name: Run Bot Screener (6 Hours)
         env:
           TELEGRAM_API_ID: ${{ secrets.TELEGRAM_API_ID }}
           TELEGRAM_API_HASH: ${{ secrets.TELEGRAM_API_HASH }}
