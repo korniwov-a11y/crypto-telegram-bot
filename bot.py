@@ -33,7 +33,6 @@ exchange = ccxt.bybit({
         'defaultMarginMode': 'cross',  # Режим Кросс-маржи
     }
 })
-exchange.set_sandbox_mode(True)
 
 # Переключение авторизации с автопереподключением при сетевых сбоях
 if TELEGRAM_STRING_SESSION:
