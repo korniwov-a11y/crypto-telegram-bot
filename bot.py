@@ -403,7 +403,40 @@ async def load_markets_with_retry(max_retries: int = 3, retry_delay: float = 2.0
     return False
 
 
+async def cleanup_resources():
+    """Корректно закрывает все открытые соединения и ресурсы"""
+    global exchange, client
+    
+    logger.info("=" * 70)
+    logger.info("🔌 Выполняется выключение бота...")
+    logger.info("=" * 70)
+
+    # Закрытие CCXT exchange
+    if exchange:
+        try:
+            await exchange.close()
+            logger.info("[SHUTDOWN] ✅ Сессия CCXT закрыта корректно")
+        except Exception as e:
+            logger.warning(f"[SHUTDOWN] ⚠️  Ошибка при закрытии exchange: {e}")
+        finally:
+            exchange = None
+
+    # Отключение Telethon клиента
+    if client:
+        try:
+            await client.disconnect()
+            logger.info("[SHUTDOWN] ✅ Telethon отключен корректно")
+        except Exception as e:
+            logger.warning(f"[SHUTDOWN] ⚠️  Ошибка при отключении Telethon: {e}")
+        finally:
+            client = None
+
+    logger.info("=" * 70)
+    logger.info("⏹️  Бот остановлен")
+
+
 async def main():
+    """Основная функция с улучшенной обработкой ошибок"""
     global client, exchange
 
     logger.info("=" * 70)
@@ -413,49 +446,28 @@ async def main():
     logger.info(f"🪙 Bybit Demo API: {'активен' if BYBIT_DEMO_KEY else 'не настроен'}")
     logger.info("=" * 70)
 
-    if not await init_bybit(max_retries=3, retry_delay=2.0):
-        logger.error("❌ Не удалось подключиться к Bybit. Выход.")
-        return
-
-    if not await load_markets_with_retry(max_retries=3, retry_delay=2.0):
-        logger.error("❌ Не удалось загрузить маркеты. Выход.")
-        if exchange:
-            try:
-                await exchange.close()
-            except Exception as e:
-                logger.warning(f"[SHUTDOWN] Ошибка при закрытии exchange: {e}")
-        return
-
     try:
+        if not await init_bybit(max_retries=3, retry_delay=2.0):
+            logger.error("❌ Не удалось подключиться к Bybit. Выход.")
+            return
+
+        if not await load_markets_with_retry(max_retries=3, retry_delay=2.0):
+            logger.error("❌ Не удалось загрузить маркеты. Выход.")
+            return
+
         await client.start()
         logger.info("✅ Бот подключен к Telegram")
-        logger.info(f"⏱️  Бот запущен. Ожидание сигналов из {TARGET_CHANNEL}...")
+        logger.info(f"⏱️  Бот запущан. Ожидание сигналов из {TARGET_CHANNEL}...")
         logger.info("=" * 70)
 
+        # Запуск основного цикла Telegram клиента
         await client.run_until_disconnected()
 
     except Exception as e:
-        logger.error(f"[ERROR] Ошибка Telegram: {e}", exc_info=True)
+        logger.error(f"[ERROR] Критическая ошибка: {e}", exc_info=True)
     finally:
-        logger.info("=" * 70)
-        logger.info("🔌 Выполняется выключение бота...")
-
-        if exchange:
-            try:
-                await exchange.close()
-                logger.info("[SHUTDOWN] ✅ Сессия CCXT закрыта")
-            except Exception as e:
-                logger.warning(f"[SHUTDOWN] ⚠️  Ошибка при закрытии exchange: {e}")
-
-        if client:
-            try:
-                await client.disconnect()
-                logger.info("[SHUTDOWN] ✅ Telethon отключен")
-            except Exception as e:
-                logger.warning(f"[SHUTDOWN] ⚠️  Ошибка при отключении Telethon: {e}")
-
-        logger.info("=" * 70)
-        logger.info("⏹️  Бот остановлен")
+        # Гарантированное закрытие всех ресурсов в любом случае
+        await cleanup_resources()
 
 
 if __name__ == '__main__':
