@@ -47,7 +47,8 @@ async def init_bybit():
             'secret': BYBIT_DEMO_SECRET,
             'enableRateLimit': True,
             'options': {
-                'defaultType': 'future',
+                'defaultType': 'linear',  # КРИТИЧНО: 'linear' для USDT Бессрочных деривативов!
+                'defaultSubType': 'linear',
                 'defaultMarginMode': 'cross',
             }
         })
